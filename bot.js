@@ -1648,13 +1648,60 @@ const commands = {
     args: ['target', 'count'],
     groupAdminRequired: false,
   },
-  help: {
+  stats: {
     handler: async (conn, from) => {
+      const _s = conn.state
+      const mem = process.memoryUsage()
+      const up = Math.floor((Date.now() - startTime) / 1000)
       await conn.sendMessage(from, {
-        text: 'Commands:\n!ping\n!list\n!send <payload> <target_jid>\n!run <file> <target_jid> [count]\n!calltest <target_jid>\n!callspam <target_jid> [count]',
+        text: `📊 Commands: ${_s.totalCommandsAttempted}/${_s.totalCommandsSucceeded} | Sessions: ${connections.size} | Uptime: ${up}s | Memory: ${(mem.heapUsed / 1024 / 1024).toFixed(2)} MB`,
       })
     },
-    aliases: ['h', 'menu'],
+    aliases: ['stat'],
+    args: [],
+    groupAdminRequired: false,
+  },
+  menu: {
+    handler: async (conn, from) => {
+      const menuText = `*📋 CYPHER MDX Commands*\n\n` +
+        `🏓 !ping / !p\n📜 !list / !ls\n📦 !send <payload> <jid>\n🎯 !run <routine> <jid> [n]\n📞 !calltest <jid>\n🔁 !callspam <jid> [count]\n📊 !stats\n\n` +
+        `🤖 *PAYLOADS*\n${Object.keys(payloads).map((k) => `!send ${k} <jid>`).join('\n')}\n\n` +
+        `🛠️ *ROUTINES*\n${Object.keys(routines).slice(0, 20).map((k) => `!run ${k} <jid>`).join('\n')}\n\n` +
+        `_Send !help for a detailed guide_`
+      await conn.sendMessage(from, { text: menuText })
+    },
+    aliases: ['m'],
+    args: [],
+    groupAdminRequired: false,
+  },
+  help: {
+    handler: async (conn, from) => {
+      const helpText = `🤖 *Welcome to CYPHER MDX* 🤖\n\n` +
+        `Hi there! I'm CYPHER MDX, a WhatsApp crash-payload delivery system. ` +
+        `I can blast payloads, fire call offers, and manage loaded routines from ` +
+        `any chat. Here's the complete tour of my commands.\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `🔰 *GENERAL COMMANDS*\n\n` +
+        `• *!ping* / *!p*\n  Checks if I'm online and responding. I'll reply "pong".\n\n` +
+        `• *!list* / *!ls*\n  Lists every loaded payload and routine by name.\n\n` +
+        `• *!menu* / *!m*\n  Compact command list with available payloads & routines.\n\n` +
+        `• *!stats*\n  Shows command usage, active sessions, uptime and memory.\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `📦 *PAYLOAD COMMANDS*\n\n` +
+        `• *!send <payload> <jid>*\n  Builds a payload with generateWAMessageFromContent and relays it ` +
+        `to the target. Logs the protobuf wire size.\n  Example: !send blanknotif 2348012345678\n\n` +
+        `• *!run <routine> <jid> [count]*\n  Invokes an embedded crash routine against the target. ` +
+        `Optional trailing number loops it that many times.\n  Example: !run HardInvis 2348012345678 100\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `📞 *CALL COMMANDS*\n\n` +
+        `• *!calltest <jid>*\n  Sends one call offer (native offerCall, raw node fallback).\n\n` +
+        `• *!callspam <jid> [count]*\n  Sends multiple call offers with a 1.5s delay between each.\n` +
+        `  Example: !callspam 2348012345678 5\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `_JIDs are phone numbers with country code — the bot normalizes them automatically._`
+      await conn.sendMessage(from, { text: helpText })
+    },
+    aliases: ['h'],
     args: [],
     groupAdminRequired: false,
   },
