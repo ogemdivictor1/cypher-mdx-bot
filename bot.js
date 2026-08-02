@@ -53,13 +53,49 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const randJids = (n, low = 500000, high = 9000000) =>
   Array.from({ length: n }, () => `1${Math.floor(Math.random() * high) + low}@s.whatsapp.net`)
 
-// strip domain + formatting, keep a bare number -> full jid
+// ---------------------------------------------------------------------------
+// JID helpers (mirror cypher-md: normalizeJid + resolveJid + lidToPhone)
+// ---------------------------------------------------------------------------
+
+// strip to bare digits: "2348012345678:0@s.whatsapp.net" -> "2348012345678"
 const normalizeJid = (jid) => {
-  const bare = String(jid || '')
-    .replace(/@[\w.-]+$/, '')
-    .replace(/[+\s()-]/g, '')
-  if (!bare) return ''
-  return /^\d+$/.test(bare) ? `${bare}@s.whatsapp.net` : bare
+  if (!jid) return ''
+  return jid.split(':')[0].split('@')[0].split('.')[0].replace(/[^0-9]/g, '')
+}
+
+// cached LID -> phone (and reverse) resolution map, shared across sessions
+const lidToPhone = new Map()
+
+// Resolve a JID to a usable destination:
+//  - full jids (@s.whatsapp.net / @g.us / @broadcast) pass through
+//  - @lid is resolved to the phone JID via cache, then conn.findUserId
+//  - bare numbers are normalized to phone jids
+const resolveJid = async (jid, conn) => {
+  if (!jid) return jid
+  if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us') || jid.endsWith('@broadcast')) return jid
+  if (jid.endsWith('@lid')) {
+    const norm = normalizeJid(jid)
+    if (lidToPhone.has(norm)) return lidToPhone.get(norm) + '@s.whatsapp.net'
+    if (conn) {
+      try {
+        const ids = await conn.findUserId(jid)
+        if (ids?.phoneNumber) {
+          const phoneNorm = normalizeJid(ids.phoneNumber)
+          lidToPhone.set(norm, phoneNorm)
+          lidToPhone.set(phoneNorm, norm)
+          return ids.phoneNumber
+        }
+      } catch (_) {}
+    }
+    return jid
+  }
+  return normalizeJid(jid) ? `${normalizeJid(jid)}@s.whatsapp.net` : jid
+}
+
+// safe full-jid comparison (handles LID vs phone digit strings)
+const sameUser = (a, b) => {
+  if (!a || !b) return false
+  return areJidsSameUser(a, b) || normalizeJid(a) === normalizeJid(b)
 }
 
 // protobuf wire size of a generated WAMessage, with JSON fallback
@@ -1572,7 +1608,7 @@ const commands = {
   send: {
     handler: async (conn, from, args, msg, sender) => {
       const [payloadName, targetRaw] = args
-      const target = normalizeJid(targetRaw || '')
+      const target = await resolveJid(targetRaw || '', conn)
       if (!target) {
         await conn.sendMessage(from, { text: `[!send] invalid target: ${targetRaw}` })
         return
@@ -1596,7 +1632,7 @@ const commands = {
   run: {
     handler: async (conn, from, args, msg, sender) => {
       const [routineName, targetRaw, ...extra] = args
-      const target = normalizeJid(targetRaw || '')
+      const target = await resolveJid(targetRaw || '', conn)
       if (!target) {
         await conn.sendMessage(from, { text: `[!run] invalid target: ${targetRaw}` })
         return
@@ -1621,7 +1657,7 @@ const commands = {
   },
   calltest: {
     handler: async (conn, from, args) => {
-      const target = normalizeJid(args[0] || '')
+      const target = await resolveJid(args[0] || '', conn)
       if (!target) {
         await conn.sendMessage(from, { text: `[!calltest] invalid target: ${args[0]}` })
         return
@@ -1635,7 +1671,7 @@ const commands = {
   },
   callspam: {
     handler: async (conn, from, args) => {
-      const target = normalizeJid(args[0] || '')
+      const target = await resolveJid(args[0] || '', conn)
       if (!target) {
         await conn.sendMessage(from, { text: `[!callspam] invalid target: ${args[0]}` })
         return
@@ -1886,6 +1922,12 @@ async function startBot(phoneNumber, socket, _useDbIgnored, preloadedState, prel
       if (reconnectTimers.has(sid)) {
         clearTimeout(reconnectTimers.get(sid))
         reconnectTimers.delete(sid)
+      }
+      // Register our own LID -> phone mapping so LID senders resolve back to us
+      if (conn.user?.lid) {
+        const lidNorm = normalizeJid(conn.user.lid)
+        lidToPhone.set(lidNorm, normalizeJid(conn.user.id))
+        lidToPhone.set(normalizeJid(conn.user.id), lidNorm)
       }
       if (socket) socket.emit('connected', 'Connected')
       console.log(`[CONN] ${sid} ready — listening for commands (${conn.user?.id || 'no jid yet'})`)
