@@ -40,7 +40,7 @@ import { pathToFileURL } from 'node:url'
 import pino from 'pino'
 import { Boom } from '@hapi/boom'
 import { fileURLToPath } from 'node:url'
-import { useAuthState } from './storage.js'
+import { useAuthState, deleteAuthSession } from './storage.js'
 
 process.on('unhandledRejection', (err) => {
   if (err?.message) console.error('[FATAL]', err.message)
@@ -1761,6 +1761,31 @@ const commands = {
       })
     },
     aliases: ['stat'],
+    args: [],
+    groupAdminRequired: false,
+  },
+  clearsession: {
+    handler: async (conn, from) => {
+      // Identify the session backing this connection.
+      let sid = 'main'
+      for (const [k, c] of connections) {
+        if (c === conn) { sid = k; break }
+      }
+      await conn.sendMessage(from, { text: `⚠️ Clearing session ${sid}... you will need to re-pair.` })
+      try {
+        conn.ev.removeAllListeners()
+        if (conn.ws) await conn.ws.close()
+        if (typeof conn.end === 'function') await conn.end()
+      } catch (_) {}
+      connections.delete(sid)
+      sessions.delete(sid)
+      isConnecting.delete(sid)
+      if (sid !== 'main') {
+        try { await deleteAuthSession(sid) } catch (_) {}
+      }
+      console.log(`[CS] cleared session ${sid}`)
+    },
+    aliases: ['csession', 'unpair'],
     args: [],
     groupAdminRequired: false,
   },

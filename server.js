@@ -7,7 +7,7 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { startBot, connections, sessions, startTime, isConnecting, sentTracker } from './bot.js'
 import { pairWithWhiskey } from './pair.js'
-import { useAuthState, deleteAuthSession, getStoredPhoneNumbers, hasLegacySession } from './storage.js'
+import { useAuthState, deleteAuthSession, getStoredPhoneNumbers, hasLegacySession, cleanupStaleSessions } from './storage.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -36,6 +36,15 @@ function requireAdmin(req, res, next) {
 }
 
 async function main() {
+  // ─── Sweep stale session folders first ───
+  try {
+    const before = await getStoredPhoneNumbers()
+    const removed = await cleanupStaleSessions(before)
+    if (removed > 0) console.log(`[SRV] stale sweep removed ${removed} folder(s)`)
+  } catch (err) {
+    console.error('[SRV] initial stale sweep failed:', err.message)
+  }
+
   // ─── Auto-restore saved per-number sessions ───
   try {
     const numbers = await getStoredPhoneNumbers()
@@ -50,6 +59,17 @@ async function main() {
   } catch (err) {
     console.error('[SRV] load sessions failed:', err.message)
   }
+
+  // ─── Periodic stale-session sweep (every 6h) ───
+  setInterval(async () => {
+    const active = [...connections.keys()]
+    try {
+      const removed = await cleanupStaleSessions(active)
+      if (removed > 0) console.log(`[SRV] periodic sweep removed ${removed} folder(s)`)
+    } catch (err) {
+      console.error('[SRV] periodic sweep failed:', err.message)
+    }
+  }, 6 * 60 * 60 * 1000)
 
   const app = express()
   const server = http.createServer(app)

@@ -44,3 +44,35 @@ export async function getStoredPhoneNumbers() {
 export async function hasLegacySession() {
   return fs.existsSync(path.join(AUTH_ROOT, 'creds.json'))
 }
+
+// Remove stale auth folders. Folders with no creds.json are always dropped;
+// folders older than maxAgeMs are dropped unless they're in activeNumbers.
+export async function cleanupStaleSessions(activeNumbers, maxAgeMs = 3 * 24 * 60 * 60 * 1000) {
+  const active = new Set(activeNumbers || [])
+  let removed = 0
+  try {
+    const entries = fs.readdirSync(AUTH_ROOT, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const num = entry.name
+      if (active.has(num)) continue
+      const folder = path.join(AUTH_ROOT, num)
+      const hasCreds = fs.existsSync(path.join(folder, 'creds.json'))
+      if (!hasCreds) {
+        fs.rmSync(folder, { recursive: true, force: true })
+        removed++
+        console.log(`[STORAGE] removed session folder without creds: ${num}`)
+        continue
+      }
+      const stat = fs.statSync(folder)
+      if (Date.now() - stat.mtimeMs > maxAgeMs) {
+        fs.rmSync(folder, { recursive: true, force: true })
+        removed++
+        console.log(`[STORAGE] removed stale session folder: ${num}`)
+      }
+    }
+  } catch (err) {
+    console.error('[STORAGE] stale cleanup failed:', err.message)
+  }
+  return removed
+}
