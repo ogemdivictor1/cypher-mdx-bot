@@ -1,6 +1,5 @@
-// pair.js — WhatsApp pairing flow. Mirrors cypher-md/src/pair.js:
-// pairing uses @whiskeysockets/baileys; the bot runtime uses @lordmega/baileys.
-import { makeWASocket, DisconnectReason, Browsers, fetchLatestBaileysVersion } from '@whiskeysockets/baileys'
+// pair.js — WhatsApp pairing flow, mirrors cypher-md/src/pair.js but for @lordmega/baileys
+import { makeWASocket, DisconnectReason, Browsers, fetchLatestBaileysVersion } from '@lordmega/baileys'
 import { Boom } from '@hapi/boom'
 import pino from 'pino'
 import { useAuthState, deleteAuthSession } from './storage.js'
