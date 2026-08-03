@@ -1582,6 +1582,25 @@ function resolveRoutine(name) {
   return null
 }
 
+// Names like "callWithNode (1)", "blank lagi", "delay apk" contain spaces and
+// trailing numbers. Match the LONGEST known name from the front of args so the
+// target/count after it are never swallowed. Returns { name, value/fn, rest }.
+function matchPayloadFromArgs(args) {
+  for (let i = Math.min(args.length, 4); i >= 1; i--) {
+    const found = resolvePayload(args.slice(0, i).join(' '))
+    if (found) return { name: found.name, value: found.value, rest: args.slice(i) }
+  }
+  return null
+}
+
+function matchRoutineFromArgs(args) {
+  for (let i = Math.min(args.length, 4); i >= 1; i--) {
+    const found = resolveRoutine(args.slice(0, i).join(' '))
+    if (found) return { name: found.name, fn: found.fn, rest: args.slice(i) }
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Command Registry (mirrors cypher-md: {handler, aliases, args, groupAdminRequired})
 // ---------------------------------------------------------------------------
@@ -1607,23 +1626,22 @@ const commands = {
   },
   send: {
     handler: async (conn, from, args, msg, sender) => {
-      const [payloadName, targetRaw] = args
-      const target = await resolveJid(targetRaw || '', conn)
+      const matched = matchPayloadFromArgs(args)
+      if (!matched) {
+        await conn.sendMessage(from, { text: '[!send] unknown payload (try !list)' })
+        return
+      }
+      const target = await resolveJid(matched.rest[0] || '', conn)
       if (!target) {
-        await conn.sendMessage(from, { text: `[!send] invalid target: ${targetRaw}` })
+        await conn.sendMessage(from, { text: `[!send] invalid target: ${matched.rest[0]}` })
         return
       }
-      const found = resolvePayload(payloadName)
-      if (!found) {
-        await conn.sendMessage(from, { text: `[!send] unknown payload: ${payloadName} (try !list)` })
-        return
-      }
-      const raw = typeof found.value === 'function' ? found.value() : found.value
+      const raw = typeof matched.value === 'function' ? matched.value() : matched.value
       const wmsg = generateWAMessageFromContent(target, raw)
       await conn.relayMessage(target, wmsg.message, { messageId: wmsg.key.id })
       const bytes = wireSize(wmsg)
-      console.log(`[send] "${found.name}" -> ${target} (wire size: ${bytes} bytes)`)
-      await conn.sendMessage(from, { text: `[!send] delivered "${found.name}" -> ${target} (wire size: ${bytes} bytes)` })
+      console.log(`[send] "${matched.name}" -> ${target} (wire size: ${bytes} bytes)`)
+      await conn.sendMessage(from, { text: `[!send] delivered "${matched.name}" -> ${target} (wire size: ${bytes} bytes)` })
     },
     aliases: ['s'],
     args: ['payload', 'target'],
@@ -1631,25 +1649,24 @@ const commands = {
   },
   run: {
     handler: async (conn, from, args, msg, sender) => {
-      const [routineName, targetRaw, ...extra] = args
-      const target = await resolveJid(targetRaw || '', conn)
+      const matched = matchRoutineFromArgs(args)
+      if (!matched) {
+        await conn.sendMessage(from, { text: '[!run] unknown routine (try !list)' })
+        return
+      }
+      const target = await resolveJid(matched.rest[0] || '', conn)
       if (!target) {
-        await conn.sendMessage(from, { text: `[!run] invalid target: ${targetRaw}` })
+        await conn.sendMessage(from, { text: `[!run] invalid target: ${matched.rest[0]}` })
         return
       }
-      const found = resolveRoutine(routineName)
-      if (!found) {
-        await conn.sendMessage(from, { text: `[!run] unknown routine: ${routineName} (try !list)` })
-        return
-      }
-      const first = extra[0]
+      const first = matched.rest[1]
       const opts = {}
       if (first && /^\d+$/.test(first)) opts.count = parseInt(first, 10)
       // Obtained functions accept (sock, target); embedded routines accept (target).
-      const result = found.fn.length >= 2
-        ? await found.fn(conn, target, opts)
-        : await found.fn(target, false, opts)
-      await conn.sendMessage(from, { text: `[!run] "${found.name}" -> ${target} done${result ? ` (${result})` : ''}` })
+      const result = matched.fn.length >= 2
+        ? await matched.fn(conn, target, opts)
+        : await matched.fn(target, false, opts)
+      await conn.sendMessage(from, { text: `[!run] "${matched.name}" -> ${target} done${result ? ` (${result})` : ''}` })
     },
     aliases: ['r'],
     args: ['routine', 'target'],
