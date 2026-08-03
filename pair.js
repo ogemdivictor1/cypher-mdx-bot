@@ -1,22 +1,20 @@
-// pair.js — WhatsApp pairing flow. Faithful port of cypher-md/src/pair.js:
-// pairing uses @whiskeysockets/baileys; the bot runtime uses @lordmega/baileys.
-import {
+const {
   makeWASocket,
   DisconnectReason,
   Browsers,
   fetchLatestBaileysVersion
-} from '@whiskeysockets/baileys';
+} = require('@whiskeysockets/baileys');
 
-import { useAuthState, deleteAuthSession } from './storage.js';
-import { Boom } from '@hapi/boom';
-import pino from 'pino';
+const storage = require('./storage');
+const { Boom } = require('@hapi/boom');
+const pino = require('pino');
 
-export async function pairWithWhiskey(phoneNumber, socket) {
+async function pairWithWhiskey(phoneNumber, socket) {
   // Wipe any stale session first so pairing always starts fresh
-  await deleteAuthSession(phoneNumber).catch(() => {});
+  await storage.deleteAuthSession(phoneNumber).catch(() => {});
 
   // Resolve auth backend
-  const { state, saveCreds } = await useAuthState(phoneNumber);
+  const { state, saveCreds } = await storage.useAuthState(phoneNumber);
 
   const { version } = await fetchLatestBaileysVersion();
 
@@ -78,7 +76,7 @@ export async function pairWithWhiskey(phoneNumber, socket) {
 
           if (reason === DisconnectReason.loggedOut) {
             socket.emit('logged-out', 'WhatsApp session logged out');
-            await deleteAuthSession(phoneNumber).catch(() => {});
+            await storage.deleteAuthSession(phoneNumber).catch(() => {});
             if (!resolved) { resolved = true; reject(new Error('Logged out')); }
           } else {
             socket.emit('error', 'Connection closed, please try again');
@@ -122,3 +120,5 @@ export async function pairWithWhiskey(phoneNumber, socket) {
     startPairingSocket();
   });
 }
+
+module.exports = { pairWithWhiskey };

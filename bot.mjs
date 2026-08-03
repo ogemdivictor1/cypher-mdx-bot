@@ -40,7 +40,9 @@ import { pathToFileURL } from 'node:url'
 import pino from 'pino'
 import { Boom } from '@hapi/boom'
 import { fileURLToPath } from 'node:url'
-import { useAuthState, deleteAuthSession } from './storage.js'
+import storageMod from './storage.js'
+
+const { useAuthState, deleteAuthSession } = storageMod
 
 process.on('unhandledRejection', (err) => {
   if (err?.message) console.error('[FATAL]', err.message)
@@ -170,6 +172,7 @@ async function sendCallOffer(target, count = 1) {
 const connections = new Map()           // sessionId -> socket instance
 const sessions = new Map()              // sessionId -> per-session state (EXPORTED)
 const startTime = Date.now()
+const connectedNumbers = new Set()      // sessionIds that already got the welcome DM
 
 // ── Sent-message delivery tracker ──
 // key: msgId -> { type, name, target, sentAt, status, updatedAt }
@@ -248,7 +251,7 @@ const payloads = {}
 const routines = {}
 
 const scanDir = path.dirname(fileURLToPath(import.meta.url))
-let ownNames = ['bot.js', 'bot.mjs', 'bot_test.mjs', 'pair.js', 'server.js', 'storage.js']
+let ownNames = ['bot.js', 'bot.mjs', 'bot_test.mjs', 'pair.js', 'server.js', 'server.mjs', 'storage.js']
 
 try {
   const entries = fs.readdirSync(scanDir, { withFileTypes: true })

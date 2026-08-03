@@ -5,9 +5,12 @@ import { Server } from 'socket.io'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { startBot, connections, sessions, startTime, isConnecting, sentTracker } from './bot.js'
-import { pairWithWhiskey } from './pair.js'
-import { useAuthState, deleteAuthSession, getStoredPhoneNumbers, hasLegacySession, cleanupStaleSessions } from './storage.js'
+import { startBot, connections, sessions, startTime, isConnecting, sentTracker } from './bot.mjs'
+import pairMod from './pair.js'
+import storageMod from './storage.js'
+
+const { pairWithWhiskey } = pairMod
+const { useAuthState, deleteAuthSession, getStoredPhoneNumbers, hasLegacySession, cleanupStaleSessions } = storageMod
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 

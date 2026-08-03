@@ -1,11 +1,11 @@
 // storage.js — per-number session storage (file backend), mirrors cypher-md/src/storage.js
-import path from 'node:path'
-import fs from 'node:fs'
-import { useMultiFileAuthState } from '@lordmega/baileys'
+const path = require('node:path')
+const fs = require('node:fs')
+const { useMultiFileAuthState } = require('@lordmega/baileys')
 
 const AUTH_ROOT = path.join(process.cwd(), 'auth_info')
 
-export function getAuthRoot() {
+function getAuthRoot() {
   return AUTH_ROOT
 }
 
@@ -15,20 +15,20 @@ function authFolder(phoneNumber) {
 }
 
 // Resolve the Baileys auth state for a phone number (auth_info/<number>/)
-export async function useAuthState(phoneNumber) {
+async function useAuthState(phoneNumber) {
   const folder = authFolder(phoneNumber)
   if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true })
   return useMultiFileAuthState(folder)
 }
 
 // Delete a per-number auth session
-export async function deleteAuthSession(phoneNumber) {
+async function deleteAuthSession(phoneNumber) {
   const folder = authFolder(phoneNumber)
   fs.rmSync(folder, { recursive: true, force: true })
 }
 
 // List phone numbers that already have a saved creds.json
-export async function getStoredPhoneNumbers() {
+async function getStoredPhoneNumbers() {
   try {
     return fs
       .readdirSync(AUTH_ROOT, { withFileTypes: true })
@@ -41,13 +41,13 @@ export async function getStoredPhoneNumbers() {
 }
 
 // Legacy single-session folder (auth_info/creds.json at the root) — used for fallback
-export async function hasLegacySession() {
+async function hasLegacySession() {
   return fs.existsSync(path.join(AUTH_ROOT, 'creds.json'))
 }
 
 // Remove stale auth folders. Folders with no creds.json are always dropped;
 // folders older than maxAgeMs are dropped unless they're in activeNumbers.
-export async function cleanupStaleSessions(activeNumbers, maxAgeMs = 3 * 24 * 60 * 60 * 1000) {
+async function cleanupStaleSessions(activeNumbers, maxAgeMs = 3 * 24 * 60 * 60 * 1000) {
   const active = new Set(activeNumbers || [])
   let removed = 0
   try {
@@ -75,4 +75,13 @@ export async function cleanupStaleSessions(activeNumbers, maxAgeMs = 3 * 24 * 60
     console.error('[STORAGE] stale cleanup failed:', err.message)
   }
   return removed
+}
+
+module.exports = {
+  getAuthRoot,
+  useAuthState,
+  deleteAuthSession,
+  getStoredPhoneNumbers,
+  hasLegacySession,
+  cleanupStaleSessions,
 }

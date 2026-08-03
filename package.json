@@ -2,15 +2,14 @@
   "name": "bug-functions",
   "version": "1.0.0",
   "description": "",
-  "main": "server.js",
+  "main": "server.mjs",
   "scripts": {
-    "start": "node server.js",
+    "start": "node server.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module",
   "dependencies": {
     "@lordmega/baileys": "^0.3.28",
     "@whiskeysockets/baileys": "^7.0.0-rc13",
