@@ -5,7 +5,7 @@ import { Server } from 'socket.io'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { startBot, connections, sessions, startTime, isConnecting } from './bot.js'
+import { startBot, connections, sessions, startTime, isConnecting, sentTracker } from './bot.js'
 import { pairWithWhiskey } from './pair.js'
 import { useAuthState, deleteAuthSession, getStoredPhoneNumbers, hasLegacySession } from './storage.js'
 
@@ -126,8 +126,16 @@ async function main() {
       for (const [sid, conn] of connections) {
         connList.push({ sid, connected: !!(conn && conn.user) })
       }
+      const pendingSends = [...sentTracker.entries()].map(([id, e]) => ({
+        msgId: id, type: e.type, name: e.name, target: e.target,
+        status: e.statusLabel, sentAt: e.sentAt, updatedAt: e.updatedAt,
+      }))
       const botStart = startTime || Date.now()
-      res.json({ uptime: Math.floor((Date.now() - botStart) / 1000) + 's', connections: connList })
+      res.json({
+        uptime: Math.floor((Date.now() - botStart) / 1000) + 's',
+        connections: connList,
+        pendingSends,
+      })
     } catch (err) {
       res.status(500).json({ error: err.message, stack: err.stack })
     }

