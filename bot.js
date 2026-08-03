@@ -1637,7 +1637,7 @@ const commands = {
         return
       }
       const raw = typeof matched.value === 'function' ? matched.value() : matched.value
-      const wmsg = generateWAMessageFromContent(target, raw)
+      const wmsg = generateWAMessageFromContent(target, raw, {})
       await conn.relayMessage(target, wmsg.message, { messageId: wmsg.key.id })
       const bytes = wireSize(wmsg)
       console.log(`[send] "${matched.name}" -> ${target} (wire size: ${bytes} bytes)`)
