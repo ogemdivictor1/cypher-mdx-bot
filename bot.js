@@ -191,56 +191,33 @@ function createSessionState() {
 let sock = null
 
 // ---------------------------------------------------------------------------
-// Payload discovery — dynamic import of every *.js in the script folder.
-// Excludes bot.js itself, pair.js and anything under node_modules.
+// Payload discovery — load only clean, real modules.
+//
+// The crash scripts (blanknotif.js, Delay1.js, ...) are NOT valid modules, so
+// they are NOT import()ed here — their functions are embedded in the ROUTINES
+// registry below. We only load:
+//   - payloads.mjs  (clean named export: payload objects for !send)
+//   - detect.mjs    (optional scoreMessage hook)
+//   - CallCrash.js / IosInvisible.js via the obfuscated UMD sandbox loader
 // ---------------------------------------------------------------------------
 const payloads = {}
 const routines = {}
 
 const scanDir = __dirname
-let ownNames = ['bot.js', 'bot.mjs', 'bot_test.mjs', 'pair.js', 'server.js', 'storage.js']
 
 ;(async () => {
-  try {
-    const entries = fs.readdirSync(scanDir, { withFileTypes: true })
-    const jsFiles = entries
-      .filter((e) => e.isFile())
-      .filter((e) => e.name.endsWith('.js'))
-      .filter((e) => !e.name.includes('node_modules'))
-      .filter((e) => !ownNames.some((n) => e.name.toLowerCase() === n))
-
-    for (const file of jsFiles) {
-      const key = file.name.replace(/\.js$/, '')
-      try {
-        const mod = await import(pathToFileURL(path.join(scanDir, file.name)).href)
-        const def = mod?.default ?? mod
-        if (def && typeof def === 'object' && Object.keys(def).length) {
-          payloads[key] = def
-          console.log(`[load] "${key}" -> payload object`)
-        } else if (typeof def === 'function') {
-          routines[key] = def
-          console.log(`[load] "${key}" -> default function registered`)
-        } else {
-          console.warn(`[load] "${key}" -> no usable default export (skipped)`)
-        }
-      } catch (err) {
-        console.warn(`[load] "${key}" failed (${err.message}) — source is not a clean module, using built-in routine`)
-      }
-    }
-  } catch (err) {
-    console.warn(`[load] could not scan folder: ${err.message}`)
-  }
-
-  // Bonus: pull in payloads.mjs (explicit named export) if present.
+  // payloads.mjs — clean named export of message-object payloads
   try {
     const { payloads: extra } = await import(pathToFileURL(path.join(scanDir, 'payloads.mjs')).href)
     if (extra) {
       for (const [k, v] of Object.entries(extra)) {
         payloads[k.replace(/\.js$/, '')] = v
       }
-      console.log(`[load] merged ${Object.keys(extra).length} payload(s) from payloads.mjs`)
+      console.log(`[load] ${Object.keys(extra).length} payload(s) from payloads.mjs`)
     }
-  } catch { /* optional */ }
+  } catch (err) {
+    console.warn(`[load] payloads.mjs failed (${err.message})`)
+  }
 
   // ---------------------------------------------------------------------------
   // Optional detection filter (log-only, never blocks or auto-replies).
