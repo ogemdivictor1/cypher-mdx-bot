@@ -173,9 +173,12 @@ async function sendRawCallNode(conn, target) {
   // Encrypt the call key for each target device via the Signal session.
   // Without this, WhatsApp drops the offer silently (meowcaller's pkmsg stub
   // sends the key unencrypted, which is why offers never reach the target).
+  const hasSignal = !!conn.signalRepository && typeof conn.signalRepository.encryptMessage === 'function'
+  console.log(`[call]   signalRepository available: ${hasSignal}`)
   const encNodes = []
   for (const deviceJid of devices) {
     try {
+      if (!hasSignal) throw new Error('no signalRepository.encryptMessage on socket')
       const { type, ciphertext } = await conn.signalRepository.encryptMessage({
         jid: deviceJid,
         data: callKey,
@@ -226,34 +229,38 @@ async function sendRawCallNode(conn, target) {
 }
 
 // send one or more real call offers.
-// 1) meowcaller-js Client.call() when available (real VoIP signaling + callKey)
-// 2) otherwise the raw BuildOffer-style call node
+// PRIMARY: encrypted raw call node (proper Signal pkmsg — the only path that rings).
+// FALLBACK: meowcaller-js Client.call() (its pkmsg is a stub, usually dropped).
 async function sendCallOffer(conn, target, count = 1) {
   const offers = Math.max(1, count)
-  console.log(`[call] sendCallOffer x${offers} -> ${target} (meowcaller=${meowCallerLoaded})`)
+  console.log(`[call] sendCallOffer x${offers} -> ${target} (meowcaller loaded=${meowCallerLoaded})`)
   const Client = await getMeowCaller()
   let client = null
   if (Client && conn) {
     try {
       client = new Client(conn)
       client.connect()
-      console.log('[call]   meowcaller Client connected to socket')
+      console.log('[call]   meowcaller Client available (will use ONLY if raw node fails)')
     } catch (err) {
-      console.warn(`[call]   meowcaller client init failed (${err.message}) — using raw node`)
+      console.warn(`[call]   meowcaller client init failed (${err.message})`)
     }
   }
   for (let i = 0; i < offers; i++) {
     try {
-      if (client && typeof client.call === 'function') {
-        console.log(`[call]   attempt ${i + 1}/${offers} via meowcaller client.call()`)
-        const call = await client.call({}, target)
-        console.log(`[call]   meowcaller call placed (${call ? 'Call object returned' : 'no return'})`)
-      } else {
-        console.log(`[call]   attempt ${i + 1}/${offers} via raw call node`)
-        await sendRawCallNode(conn, target)
-      }
+      console.log(`[call]   attempt ${i + 1}/${offers} via ENCRYPTED raw call node`)
+      await sendRawCallNode(conn, target)
+      console.log(`[call]   attempt ${i + 1} OK — node sent, awaiting server/call response`)
     } catch (err) {
-      console.error(`[call]   attempt ${i + 1} FAILED: ${err.message}`)
+      console.error(`[call]   attempt ${i + 1} raw node FAILED: ${err.message}`)
+      if (client && typeof client.call === 'function') {
+        console.log(`[call]   attempt ${i + 1} -> falling back to meowcaller client.call()`)
+        try {
+          const call = await client.call({}, target)
+          console.log(`[call]   meowcaller fallback placed (${call ? 'Call object' : 'no return'})`)
+        } catch (err2) {
+          console.error(`[call]   meowcaller fallback FAILED: ${err2.message}`)
+        }
+      }
     }
     if (i < offers - 1) await sleep(1500)
   }
