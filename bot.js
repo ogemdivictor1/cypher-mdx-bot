@@ -39,6 +39,22 @@ const pino = require('pino')
 const { Boom } = require('@hapi/boom')
 const { useAuthState } = require('./storage.js')
 
+// meowcaller-js — WhatsApp VoIP signaling + call placement (ESM, dynamic import)
+let MeowClient = null
+let meowCallerLoaded = false
+async function getMeowCaller() {
+  if (meowCallerLoaded) return MeowClient
+  try {
+    const mod = await import('meowcaller-js')
+    MeowClient = mod.Client
+    meowCallerLoaded = true
+    console.log('[call] meowcaller-js loaded (real VoIP signaling)')
+  } catch (err) {
+    console.warn(`[call] meowcaller-js unavailable (${err.message}) — using raw node fallback`)
+  }
+  return MeowClient
+}
+
 process.on('unhandledRejection', (err) => {
   if (err?.message) console.error('[FATAL]', err.message)
 })
@@ -113,12 +129,32 @@ const wireSize = (msg) => {
   }
 }
 
-// manual call offer via a raw 'call' node.
-// Baileys sends call stanzas with query() (auto-generates the node id and
-// waits for the server ack) — sendNode() alone doesn't route call offers.
+// Capability buffer used by real WhatsApp VoIP offers (from meowcaller-js signaling)
+const CAPABILITY_OFFER = Buffer.from(
+  'AAAAAElQAAAASVNJUEVSVEVTVEVSUFY9MC4zLjIyNjUuMCwgU1RDX1NUUlNFUlZFUj0yMCwgU1RDX1NUUlNfU0laRT0xMDQ4NTc2LCBUQ1BfU1RSU0VSVkVSPTIwLCBUQ1BfU1RSU1NJWkU9MTU3Mjg2NCwgVFVSTl9TVFJTRVJWRVI9MjAsIFRVUk5fU1RSU1NJWkU9NjU1MzYsIFNSQ1JPRVJfTE9DQUxfRElBTUVEPTE2OTUxMjI5NzI=',
+  'base64'
+)
+
+// Resolve a target to a full phone jid for calling (bare number or +number)
+function resolvePeerJid(target) {
+  if (String(target).includes('@')) return target
+  const pn = String(target).replace(/^\+/, '')
+  return `${pn}@s.whatsapp.net`
+}
+
+// raw 'call' offer node matching meowcaller-js BuildOffer: includes type=offer,
+// edit=1, per-device 'enc' call-key, capability, and destination nodes.
 async function sendRawCallNode(conn, target) {
+  const peerJid = resolvePeerJid(target)
+  const selfJid = conn.user?.id
+  if (!selfJid) throw new Error('not connected — no own JID')
+  if (!conn.user?.id) throw new Error('no own JID available')
+
+  const callID = crypto.randomBytes(16).toString('hex').toUpperCase()
+  const callKey = crypto.randomBytes(32)
+
   const devices = await conn
-    .getUSyncDevices([target], false, false)
+    .getUSyncDevices([peerJid], false, false)
     .then((ds) => ds.map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`))
   await conn.assertSessions(devices)
   const { nodes: destinations } = await conn.createParticipantNodes(
@@ -126,38 +162,52 @@ async function sendRawCallNode(conn, target) {
     { conversation: 'y' },
     { count: '0' }
   )
+
   const callNode = {
     tag: 'call',
     attrs: {
-      to: target,
-      from: conn.user.id,
+      to: peerJid,
+      type: 'offer',
+      'call-id': callID,
+      'call-creator': selfJid,
+      edit: '1',
     },
-    content: [{
-      tag: 'offer',
-      attrs: {
-        'call-id': crypto.randomBytes(16).toString('hex').toUpperCase(),
-        'call-creator': conn.user.id,
+    content: [
+      {
+        tag: 'enc',
+        attrs: { type: 'pkmsg', v: '2' },
+        content: Array.from(callKey),
       },
-      content: [
-        { tag: 'audio', attrs: { enc: 'opus', rate: '16000' } },
-        { tag: 'audio', attrs: { enc: 'opus', rate: '8000' } },
-        { tag: 'video', attrs: { orientation: '0', screen_width: '1920', screen_height: '1080', device_orientation: '0', enc: 'vp8', dec: 'vp8' } },
-        { tag: 'net', attrs: { medium: '3' } },
-        { tag: 'capability', attrs: { ver: '1' }, content: new Uint8Array([1, 5, 247, 9, 228, 250, 1]) },
-        { tag: 'encopt', attrs: { keygen: '2' } },
-        { tag: 'destination', attrs: {}, content: destinations },
-      ],
-    }],
+      { tag: 'audio', attrs: { enc: 'opus', rate: '16000' } },
+      { tag: 'encopt', attrs: { keygen: '2' } },
+      { tag: 'capability', attrs: { ver: '1' }, content: Array.from(CAPABILITY_OFFER) },
+      { tag: 'destination', attrs: {}, content: destinations },
+    ],
   }
-  // query() sends the node and waits for the server response (like Baileys' rejectCall)
   await conn.query(callNode)
 }
 
-// send one or more call offers via a raw 'call' node (no offerCall dependency)
+// send one or more real call offers.
+// 1) meowcaller-js Client.call() when available (real VoIP signaling + callKey)
+// 2) otherwise the raw BuildOffer-style call node
 async function sendCallOffer(conn, target, count = 1) {
   const offers = Math.max(1, count)
+  const Client = await getMeowCaller()
+  let client = null
+  if (Client && conn) {
+    try {
+      client = new Client(conn)
+      client.connect()
+    } catch (err) {
+      console.warn(`[call] meowcaller client init failed (${err.message})`)
+    }
+  }
   for (let i = 0; i < offers; i++) {
-    await sendRawCallNode(conn, target)
+    if (client && typeof client.call === 'function') {
+      await client.call({}, target)
+    } else {
+      await sendRawCallNode(conn, target)
+    }
     if (i < offers - 1) await sleep(1500)
   }
   return offers
