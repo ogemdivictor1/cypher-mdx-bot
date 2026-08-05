@@ -227,11 +227,16 @@ async function sendRawCallNode(conn, target) {
       { tag: 'destination', attrs: {}, content: destinations },
     ],
   }
+  // Call offers are fire-and-forget: WhatsApp replies via the async 'call'
+  // event, NOT a synchronous query response. Using sendNode (like meowcaller)
+  // avoids the 60s query timeout that call nodes trigger.
   try {
-    const resp = await conn.query(callNode)
-    console.log(`[call]   query() sent, server response:`, JSON.stringify(resp?.attrs || resp || 'no-response'))
+    const id = crypto.randomBytes(12).toString('hex').toUpperCase()
+    callNode.attrs.id = id
+    await conn.sendNode(callNode)
+    console.log(`[call]   sendNode OK (node id ${id}) — waiting for call event`)
   } catch (err) {
-    console.error(`[call]   query() ERROR: ${err.message}`)
+    console.error(`[call]   sendNode ERROR: ${err.message}`)
     throw err
   }
 }
