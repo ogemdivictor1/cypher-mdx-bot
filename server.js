@@ -1,15 +1,12 @@
 // server.js — Express + socket.io control plane, mirrors cypher-md/src/server.js
-import express from 'express'
-import http from 'node:http'
-import { Server } from 'socket.io'
-import path from 'node:path'
-import crypto from 'node:crypto'
-import { fileURLToPath } from 'node:url'
-import { startBot, connections, sessions, startTime, isConnecting } from './bot.js'
-import { pairWithWhiskey } from './pair.js'
-import { useAuthState, deleteAuthSession, getStoredPhoneNumbers, hasLegacySession } from './storage.js'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const express = require('express')
+const http = require('node:http')
+const { Server } = require('socket.io')
+const path = require('node:path')
+const crypto = require('node:crypto')
+const { startBot, connections, sessions, startTime, isConnecting } = require('./bot.js')
+const { pairWithWhiskey } = require('./pair.js')
+const { useAuthState, deleteAuthSession, getStoredPhoneNumbers, hasLegacySession } = require('./storage.js')
 
 // ─── Admin auth ───
 const ADMIN_USER = process.env.ADMIN_USER || 'cypher2dwrld'
