@@ -157,7 +157,15 @@ async function sendRawCallNode(conn, target) {
 
   const devices = await conn
     .getUSyncDevices([peerJid], false, false)
-    .then((ds) => ds.map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`))
+    .then((ds) => {
+      // Normalize: device may be empty/undefined -> use 0 (primary device).
+      // Malformed "user:@s.whatsapp.net" JIDs cannot be routed by WhatsApp.
+      return ds.map(({ user, device }) => {
+        const dev = (typeof device === 'number' && device >= 0) ? device : 0
+        return `${user}:${dev}@s.whatsapp.net`
+      })
+    })
+  console.log(`[call]   raw USync devices:`, JSON.stringify(await conn.getUSyncDevices([peerJid], false, false).then(ds => ds.map(d => ({ user: d.user, device: d.device })))))
   console.log(`[call]   devices: ${devices.length ? devices.join(', ') : '(none found)'}`)
   if (!devices.length) {
     console.warn(`[call]   !! no registered devices for ${peerJid} — offer will likely be dropped`)
