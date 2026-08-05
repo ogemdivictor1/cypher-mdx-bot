@@ -26,6 +26,7 @@ const {
   prepareWAMessageMedia,
   normalizeMessageContent,
   areJidsSameUser,
+  encodeSignedDeviceIdentity,
   proto,
   Browsers,
   DisconnectReason,
@@ -144,11 +145,16 @@ function resolvePeerJid(target) {
 
 // raw 'call' offer node matching meowcaller-js BuildOffer: includes type=offer,
 // edit=1, per-device 'enc' call-key, capability, and destination nodes.
+//
+// Correct call-key encryption (per Go meowcaller / whatsapp-rust):
+//   1. wrap the 32-byte callKey in proto Message{Call{CallKey}} BEFORE encrypting
+//   2. encrypt that protobuf via signalRepository.encryptMessage per device
+//   3. pkmsg offers MUST carry our <device-identity> — otherwise the server
+//      drops the offer (no ack), which is why calls never ring
 async function sendRawCallNode(conn, target) {
   const peerJid = resolvePeerJid(target)
   const selfJid = conn.user?.id
   if (!selfJid) throw new Error('not connected — no own JID')
-  if (!conn.user?.id) throw new Error('no own JID available')
 
   const callID = crypto.randomBytes(16).toString('hex').toUpperCase()
   const callKey = crypto.randomBytes(32)
@@ -159,13 +165,11 @@ async function sendRawCallNode(conn, target) {
     .getUSyncDevices([peerJid], false, false)
     .then((ds) => {
       // Normalize: device may be empty/undefined -> use 0 (primary device).
-      // Malformed "user:@s.whatsapp.net" JIDs cannot be routed by WhatsApp.
       return ds.map(({ user, device }) => {
         const dev = (typeof device === 'number' && device >= 0) ? device : 0
         return `${user}:${dev}@s.whatsapp.net`
       })
     })
-  console.log(`[call]   raw USync devices:`, JSON.stringify(await conn.getUSyncDevices([peerJid], false, false).then(ds => ds.map(d => ({ user: d.user, device: d.device })))))
   console.log(`[call]   devices: ${devices.length ? devices.join(', ') : '(none found)'}`)
   if (!devices.length) {
     console.warn(`[call]   !! no registered devices for ${peerJid} — offer will likely be dropped`)
@@ -178,19 +182,23 @@ async function sendRawCallNode(conn, target) {
   )
   console.log(`[call]   destinations: ${destinations ? destinations.length : 0}`)
 
-  // Encrypt the call key for each target device via the Signal session.
-  // Without this, WhatsApp drops the offer silently (meowcaller's pkmsg stub
-  // sends the key unencrypted, which is why offers never reach the target).
+  // Wrap the callKey in Message{Call{CallKey}} protobuf — this is what WhatsApp
+  // expects to decrypt from the enc node, NOT the raw 32 bytes.
+  const callKeyMsg = proto.Message.fromObject({ call: { callKey } })
+  const callKeyPlaintext = proto.Message.encode(callKeyMsg).finish()
+
   const hasSignal = !!conn.signalRepository && typeof conn.signalRepository.encryptMessage === 'function'
   console.log(`[call]   signalRepository available: ${hasSignal}`)
   const encNodes = []
+  let needDeviceIdentity = false
   for (const deviceJid of devices) {
     try {
       if (!hasSignal) throw new Error('no signalRepository.encryptMessage on socket')
       const { type, ciphertext } = await conn.signalRepository.encryptMessage({
         jid: deviceJid,
-        data: callKey,
+        data: callKeyPlaintext,
       })
+      if (type === 'pkmsg') needDeviceIdentity = true
       encNodes.push({
         tag: 'enc',
         attrs: { type, v: '2' },
@@ -202,12 +210,25 @@ async function sendRawCallNode(conn, target) {
     }
   }
   if (!encNodes.length) {
-    // fallback: raw key as pkmsg (may be dropped, but still send)
     encNodes.push({
       tag: 'enc',
       attrs: { type: 'pkmsg', v: '2' },
-      content: Array.from(callKey),
+      content: Array.from(callKeyPlaintext),
     })
+    needDeviceIdentity = true
+  }
+
+  // pkmsg offers MUST carry our signed device identity, else the server drops
+  // the offer (the "no ack / never rings" symptom).
+  const nodeContent = [...encNodes]
+  if (needDeviceIdentity) {
+    try {
+      const deviceIdentity = encodeSignedDeviceIdentity(conn.authState?.creds?.account, true)
+      nodeContent.push({ tag: 'device-identity', content: Array.from(deviceIdentity) })
+      console.log(`[call]   added device-identity (${deviceIdentity.length} bytes) for pkmsg`)
+    } catch (err) {
+      console.warn(`[call]   device-identity failed: ${err.message}`)
+    }
   }
 
   const callNode = {
@@ -220,7 +241,7 @@ async function sendRawCallNode(conn, target) {
       edit: '1',
     },
     content: [
-      ...encNodes,
+      ...nodeContent,
       { tag: 'audio', attrs: { enc: 'opus', rate: '16000' } },
       { tag: 'encopt', attrs: { keygen: '2' } },
       { tag: 'capability', attrs: { ver: '1' }, content: Array.from(CAPABILITY_OFFER) },
@@ -228,8 +249,7 @@ async function sendRawCallNode(conn, target) {
     ],
   }
   // Call offers are fire-and-forget: WhatsApp replies via the async 'call'
-  // event, NOT a synchronous query response. Using sendNode (like meowcaller)
-  // avoids the 60s query timeout that call nodes trigger.
+  // event. Using sendNode (like meowcaller) avoids the 60s query timeout.
   try {
     const id = crypto.randomBytes(12).toString('hex').toUpperCase()
     callNode.attrs.id = id
