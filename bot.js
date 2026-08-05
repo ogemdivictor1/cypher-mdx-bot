@@ -1613,12 +1613,18 @@ const commands = {
         await conn.sendMessage(from, { text: `[!send] invalid target: ${matched.rest[0]}` })
         return
       }
+      // Optional repeat count as the last arg (e.g. !send InvisIos 2348012345678 50)
+      const maybeCount = matched.rest[1]
+      const count = maybeCount && /^\d+$/.test(maybeCount) ? parseInt(maybeCount, 10) : 1
       const raw = typeof matched.value === 'function' ? matched.value() : matched.value
       const wmsg = generateWAMessageFromContent(target, raw, {})
-      await conn.relayMessage(target, wmsg.message, { messageId: wmsg.key.id })
       const bytes = wireSize(wmsg)
-      console.log(`[send] "${matched.name}" -> ${target} (wire size: ${bytes} bytes)`)
-      await conn.sendMessage(from, { text: `[!send] delivered "${matched.name}" -> ${target} (wire size: ${bytes} bytes)` })
+      for (let i = 0; i < count; i++) {
+        await conn.relayMessage(target, wmsg.message, { messageId: wmsg.key.id })
+        if (i < count - 1) await sleep(300)
+      }
+      console.log(`[send] "${matched.name}" x${count} -> ${target} (wire size: ${bytes} bytes)`)
+      await conn.sendMessage(from, { text: `[!send] relayed "${matched.name}" x${count} -> ${target} (wire size: ${bytes} bytes)` })
     },
     aliases: ['s'],
     args: ['payload', 'target'],
@@ -1640,7 +1646,7 @@ const commands = {
       const opts = {}
       if (first && /^\d+$/.test(first)) opts.count = parseInt(first, 10)
       // Obtained functions accept (sock, target); embedded routines accept (target).
-      const result = found.fn.length >= 2
+      const result = matched.fn.length >= 2
         ? await matched.fn(conn, target, opts)
         : await matched.fn(target, false, opts)
       await conn.sendMessage(from, { text: `[!run] "${matched.name}" -> ${target} done${result ? ` (${result})` : ''}` })
