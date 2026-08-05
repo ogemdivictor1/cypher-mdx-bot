@@ -170,6 +170,35 @@ async function sendRawCallNode(conn, target) {
   )
   console.log(`[call]   destinations: ${destinations ? destinations.length : 0}`)
 
+  // Encrypt the call key for each target device via the Signal session.
+  // Without this, WhatsApp drops the offer silently (meowcaller's pkmsg stub
+  // sends the key unencrypted, which is why offers never reach the target).
+  const encNodes = []
+  for (const deviceJid of devices) {
+    try {
+      const { type, ciphertext } = await conn.signalRepository.encryptMessage({
+        jid: deviceJid,
+        data: callKey,
+      })
+      encNodes.push({
+        tag: 'enc',
+        attrs: { type, v: '2' },
+        content: Array.from(ciphertext),
+      })
+      console.log(`[call]   enc ${deviceJid} type=${type} (${ciphertext.length} bytes)`)
+    } catch (err) {
+      console.warn(`[call]   enc failed for ${deviceJid}: ${err.message}`)
+    }
+  }
+  if (!encNodes.length) {
+    // fallback: raw key as pkmsg (may be dropped, but still send)
+    encNodes.push({
+      tag: 'enc',
+      attrs: { type: 'pkmsg', v: '2' },
+      content: Array.from(callKey),
+    })
+  }
+
   const callNode = {
     tag: 'call',
     attrs: {
@@ -180,11 +209,7 @@ async function sendRawCallNode(conn, target) {
       edit: '1',
     },
     content: [
-      {
-        tag: 'enc',
-        attrs: { type: 'pkmsg', v: '2' },
-        content: Array.from(callKey),
-      },
+      ...encNodes,
       { tag: 'audio', attrs: { enc: 'opus', rate: '16000' } },
       { tag: 'encopt', attrs: { keygen: '2' } },
       { tag: 'capability', attrs: { ver: '1' }, content: Array.from(CAPABILITY_OFFER) },
