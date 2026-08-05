@@ -113,7 +113,9 @@ const wireSize = (msg) => {
   }
 }
 
-// manual call offer via a raw 'call' node
+// manual call offer via a raw 'call' node.
+// Baileys sends call stanzas with query() (auto-generates the node id and
+// waits for the server ack) — sendNode() alone doesn't route call offers.
 async function sendRawCallNode(conn, target) {
   const devices = await conn
     .getUSyncDevices([target], false, false)
@@ -126,7 +128,10 @@ async function sendRawCallNode(conn, target) {
   )
   const callNode = {
     tag: 'call',
-    attrs: { to: target, id: conn.generateMessageTag(), from: conn.user.id },
+    attrs: {
+      to: target,
+      from: conn.user.id,
+    },
     content: [{
       tag: 'offer',
       attrs: {
@@ -144,7 +149,8 @@ async function sendRawCallNode(conn, target) {
       ],
     }],
   }
-  await conn.sendNode(callNode)
+  // query() sends the node and waits for the server response (like Baileys' rejectCall)
+  await conn.query(callNode)
 }
 
 // send one or more call offers via a raw 'call' node (no offerCall dependency)
