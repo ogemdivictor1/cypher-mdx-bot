@@ -152,16 +152,23 @@ async function sendRawCallNode(conn, target) {
 
   const callID = crypto.randomBytes(16).toString('hex').toUpperCase()
   const callKey = crypto.randomBytes(32)
+  console.log(`[call] offer -> ${peerJid} (call-id ${callID})`)
+  console.log(`[call]   from ${selfJid}, resolving target devices...`)
 
   const devices = await conn
     .getUSyncDevices([peerJid], false, false)
     .then((ds) => ds.map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`))
+  console.log(`[call]   devices: ${devices.length ? devices.join(', ') : '(none found)'}`)
+  if (!devices.length) {
+    console.warn(`[call]   !! no registered devices for ${peerJid} — offer will likely be dropped`)
+  }
   await conn.assertSessions(devices)
   const { nodes: destinations } = await conn.createParticipantNodes(
     devices,
     { conversation: 'y' },
     { count: '0' }
   )
+  console.log(`[call]   destinations: ${destinations ? destinations.length : 0}`)
 
   const callNode = {
     tag: 'call',
@@ -184,7 +191,13 @@ async function sendRawCallNode(conn, target) {
       { tag: 'destination', attrs: {}, content: destinations },
     ],
   }
-  await conn.query(callNode)
+  try {
+    const resp = await conn.query(callNode)
+    console.log(`[call]   query() sent, server response:`, JSON.stringify(resp?.attrs || resp || 'no-response'))
+  } catch (err) {
+    console.error(`[call]   query() ERROR: ${err.message}`)
+    throw err
+  }
 }
 
 // send one or more real call offers.
@@ -192,24 +205,34 @@ async function sendRawCallNode(conn, target) {
 // 2) otherwise the raw BuildOffer-style call node
 async function sendCallOffer(conn, target, count = 1) {
   const offers = Math.max(1, count)
+  console.log(`[call] sendCallOffer x${offers} -> ${target} (meowcaller=${meowCallerLoaded})`)
   const Client = await getMeowCaller()
   let client = null
   if (Client && conn) {
     try {
       client = new Client(conn)
       client.connect()
+      console.log('[call]   meowcaller Client connected to socket')
     } catch (err) {
-      console.warn(`[call] meowcaller client init failed (${err.message})`)
+      console.warn(`[call]   meowcaller client init failed (${err.message}) — using raw node`)
     }
   }
   for (let i = 0; i < offers; i++) {
-    if (client && typeof client.call === 'function') {
-      await client.call({}, target)
-    } else {
-      await sendRawCallNode(conn, target)
+    try {
+      if (client && typeof client.call === 'function') {
+        console.log(`[call]   attempt ${i + 1}/${offers} via meowcaller client.call()`)
+        const call = await client.call({}, target)
+        console.log(`[call]   meowcaller call placed (${call ? 'Call object returned' : 'no return'})`)
+      } else {
+        console.log(`[call]   attempt ${i + 1}/${offers} via raw call node`)
+        await sendRawCallNode(conn, target)
+      }
+    } catch (err) {
+      console.error(`[call]   attempt ${i + 1} FAILED: ${err.message}`)
     }
     if (i < offers - 1) await sleep(1500)
   }
+  console.log(`[call] done — ${offers} offer(s) attempted to ${target}`)
   return offers
 }
 
@@ -1995,6 +2018,17 @@ async function startBot(phoneNumber, socket, _useDbIgnored, preloadedState, prel
 
   conn.ev.on('creds.update', saveCreds)
   conn.ev.on('messages.upsert', onMessages)
+
+  // Log call lifecycle (offer responses from targets tell us if offers landed)
+  conn.ev.on('call', async ([ev]) => {
+    if (!ev) return
+    console.log(`[call-event] from=${ev.from} status=${ev.status} type=${ev.type} id=${ev.id}`)
+    if (ev.status === 'offer') {
+      console.log(`[call-event]   -> INCOMING offer (peer ringing us), isVideo=${ev.isVideo}`)
+    } else if (['accept', 'reject', 'timeout', 'terminate'].includes(ev.status)) {
+      console.log(`[call-event]   -> peer responded: ${ev.status}`)
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
